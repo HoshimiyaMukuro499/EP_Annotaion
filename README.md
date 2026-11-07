@@ -6,7 +6,7 @@ relative molecular masses, and export an annotated image plus a long-format CSV.
 
 一个用于凝胶电泳 / Western Blot 照片的交互式标注与测量小工具：提取凝胶区域、
 点击泳道与条带、测量条带中心到加样参考线的距离和条带厚度、标注 Marker 的相对
-分子质量，并导出带标注的 PNG 与长表格 CSV。
+分子质量、标注指示剂前沿（dye front），并导出带标注的 PNG 与长表格 CSV。
 
 ## 功能
 
@@ -15,6 +15,8 @@ relative molecular masses, and export an annotated image plus a long-format CSV.
 - **距离与厚度**：以加样参考线为基准，输出每条带的中心距离与厚度（默认 mm）。
 - **Marker**：任意泳道可按 `m` 设为 Marker，可连续测量任意多条带。
 - **相对分子质量**：为靠近图像边缘的 Marker 输入 kDa，在图片左/右侧生成标尺。
+- **指示剂前沿（dye front）**：按 `t` 点击指示剂前沿位置，全图绘制一条横贯的虚线，
+  并标注其到加样参考线的距离（mm）。
 - **应用内裁剪**：按 `c` 框选，之后只显示框选范围内的图像。
 - **导出**：标注图 PNG + 长表格 CSV（一条带一行，Marker 多条带不会互相覆盖）。
 - **命令行**：支持直接指定图片、演示模式、从已有 CSV 还原重绘等。
@@ -46,7 +48,8 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 3. **第 2 步**：从左到右点击每条泳道中心，按 `Enter` 进入条带测量。
 4. **第 3 步**：点击条带上边缘、再点下边缘；Marker 泳道按 `m` 标记后可连续测多条带。
 5. **第 4 步**：Marker 泳道按 `k` 输入各条带的分子量（kDa），保存时也会询问。
-6. 确认无误后按 `q` 保存退出。
+6. 需要时按 `t` 标注指示剂前沿（dye front）：点击前沿位置即可，`Delete` 可删除。
+7. 确认无误后按 `q` 保存退出。
 
 ### 常用按键
 
@@ -57,6 +60,7 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 | `m` | 当前泳道设为 / 取消 Marker |
 | `k` | 输入当前 Marker 各条带的分子量（kDa） |
 | `s` | 跳过当前泳道（无可见条带） |
+| `t` | 标注指示剂前沿（dye front）；进入后点击位置，`Delete` 删除，`Esc` 取消 |
 | `b` / `z` / `d` | 上一条泳道 / 撤销最后一条带 / 清空当前泳道 |
 | `c` | 框选裁剪：拖出矩形后 `Enter` 应用，`Esc` 取消 |
 | `f` | 重新设定加样参考线（已有距离自动重算） |
@@ -77,6 +81,8 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 | `--no-flip` | 透视校正后不水平翻转 |
 | `--marker-kda` | Marker 分子量，按从上到下用逗号分隔，如 `180,130,100,70,55,40,35` |
 | `--from-csv` | 从已有的 `*_lane_measurements.csv` 还原并重绘，不再交互（常配合 `--marker-kda`） |
+| `--dye-front-mm` | 指示剂前沿距加样参考线的距离（mm），与 `--from-csv` 配合可直接补标 |
+| `--dye-front-px` | 指示剂前沿的 y 像素坐标（凝胶图内），优先级高于 `--dye-front-mm` |
 
 示例：给已有测量结果补加分子量标尺，无需重新点击：
 
@@ -84,6 +90,31 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --marker-kda "180,130,100,70,55,40,35"
 ```
+
+示例：给已有结果补标指示剂前沿（距离单位 mm，从加样参考线量起）：
+
+```bash
+python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+    --dye-front-mm 32.5
+```
+
+也可以用像素坐标（y 值，越大越靠下）：
+
+```bash
+python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+    --dye-front-px 496
+```
+
+多个参数可以叠加，例如同时补分子量与指示剂前沿：
+
+```bash
+python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+    --marker-kda "180,130,100,70,55,40,35" --dye-front-mm 32.5
+```
+
+> 注意：`--from-csv` 会重写同名的 `*_lane_measurements.csv` 和 `*_lane_annotated.png`，
+> 运行前请先关闭 Excel / 看图软件；若文件被占用，程序会自动写到 `_alt` 文件。
+> 生成后再次读取该 CSV 时会自动保留指示剂前沿。
 
 ## 输出文件
 
@@ -98,7 +129,8 @@ python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
 CSV 主要列：`lane_index, label, is_marker, band_index, band_count,
 x_center_px, x_left_px, x_right_px, y_top_px, y_bottom_px, y_center_px,
 thickness_px, thickness_value, distance_px, distance_value, marker_kda,
-unit, note`。
+dye_front_px, dye_front_value, unit, note`
+（含有指示剂前沿的图，所有行都会填上 `dye_front_px` / `dye_front_value`）。
 
 ## 注意事项
 

@@ -10,7 +10,10 @@ WB / 凝胶图像交互标注工具
      Marker 泳道可连续测量任意多条带，按 Enter / n 结束本泳道；
   4. 按 k 可为 Marker 泳道输入各条带的相对分子质量（kDa），
      在图片最左/最右侧自动生成 kDa 标尺（仅用于靠近边缘的 Marker 泳道）；
-  5. 输出标注图 PNG + 长表 CSV（一条带一行，Marker 多条带不会互相覆盖）。
+  5. 按 t 标注指示剂前沿（dye front）：在整幅图上画一条线，
+     并显示它到加样参考线的距离；
+  6. 按 c 框选裁剪，之后只显示裁剪范围内的图像；
+  7. 输出标注图 PNG + 长表 CSV（一条带一行，Marker 多条带不会互相覆盖）。
 
 用法：
     python wb_mark_interactive.py                  # 弹窗选择文件夹里的图片
@@ -37,6 +40,7 @@ WB / 凝胶图像交互标注工具
     z          撤销当前泳道最后添加的一条带
     d          清空当前泳道的所有条带
     f          重新设定加样参考线（已有测量结果会自动重算距离）
+    t          标注指示剂前沿（dye front），点击其所在水平位置
     c          框选裁剪：拖出矩形后 Enter，只显示框选范围内的图像
     q          保存并退出
     h / ?      显示 / 隐藏按键说明
@@ -351,6 +355,7 @@ class GelModel:
         self.scale = float(scale)   # 每个像素对应的物理量（mm 或 px）
         self.unit = unit            # "mm" 或 "px"
         self.ref_y = 0.0
+        self.dye_front = None       # 指示剂前沿（dye front）的 y 像素坐标
         self.lanes = []             # [{'x': float, 'marker': bool}, ...]
         self.bands = {}             # lane_index -> [band, ...]
         self.skipped = set()        # 明确标记为“无条带”的泳道
@@ -516,6 +521,20 @@ def draw_gel(ax, rgb_bgr, model, final=False, cur=-1, hover=-1,
                 bbox=dict(boxstyle="round,pad=0.12", fc="white",
                           ec="none", alpha=0.75))
 
+    # 指示剂前沿（dye front）：横贯整幅图的一条线
+    dye = getattr(model, "dye_front", None)
+    if dye is not None:
+        dye = float(dye)
+        ax.plot([0, W], [dye, dye], color="#00796B", ls=(0, (2, 2)),
+                lw=1.3 if final else 1.6, zorder=6)
+        d_val = (dye - model.ref_y) * model.scale
+        ax.text(W - 6, dye - 2,
+                "dye front  %.1f %s" % (d_val, model.unit),
+                color="#00695C", fontsize=6.5 if final else 8,
+                ha="right", va="bottom", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.12", fc="white",
+                          ec="none", alpha=0.8))
+
     # 泳道分隔线与编号
     for i, l in enumerate(model.lanes):
         left, right = model.bounds(i)
@@ -679,6 +698,11 @@ def save_outputs(rgb_bgr, model, out_prefix):
     labels = model.labels()
     data_rows = []
     n_band = 0
+    if model.dye_front is not None:
+        dye_px_str = "%.1f" % model.dye_front
+        dye_val_str = "%.2f" % ((model.dye_front - model.ref_y) * model.scale)
+    else:
+        dye_px_str = dye_val_str = ""
     for i, l in enumerate(model.lanes):
         left, right = model.bounds(i)
         bs = sorted(model.bands.get(i, []), key=lambda b: b["center"])
@@ -695,14 +719,15 @@ def save_outputs(rgb_bgr, model, out_prefix):
                     "%.1f" % b["center"],
                     "%.1f" % b["thick_px"], "%.2f" % b["thick_val"],
                     "%.1f" % b["dist_px"], "%.2f" % b["dist_val"],
-                    kda_str, model.unit, "ok",
+                    kda_str, dye_px_str, dye_val_str, model.unit, "ok",
                 ])
                 n_band += 1
         else:
             note = ("skipped" if i in model.skipped else
                     ("marker_no_band" if l["marker"] else "not_measured"))
             data_rows.append(base[:3] + [0, 0] + base[5:] + [
-                "", "", "", "", "", "", "", "", model.unit, note,
+                "", "", "", "", "", "", "", "", dye_px_str, dye_val_str,
+                model.unit, note,
             ])
 
     header = [
@@ -710,7 +735,8 @@ def save_outputs(rgb_bgr, model, out_prefix):
         "x_center_px", "x_left_px", "x_right_px",
         "y_top_px", "y_bottom_px", "y_center_px",
         "thickness_px", "thickness_value",
-        "distance_px", "distance_value", "marker_kda", "unit", "note",
+        "distance_px", "distance_value", "marker_kda",
+        "dye_front_px", "dye_front_value", "unit", "note",
     ]
     for path in (csv_path,
                  os.path.join(BASE, out_prefix + "_lane_measurements_alt.csv")):
@@ -749,6 +775,10 @@ def save_outputs(rgb_bgr, model, out_prefix):
             print("  %-5s %-6s %6d %8.2f  %8.2f %8s" %
                   (labels[i], typ, k + 1, b["dist_val"], b["thick_val"],
                    ("%g" % kda_vals[k]) if kda_vals else "-"))
+    if model.dye_front is not None:
+        print("\n指示剂前沿（dye front）：y=%.1f px，距加样参考线 %.2f %s"
+              % (model.dye_front,
+                 (model.dye_front - model.ref_y) * model.scale, model.unit))
 
 
 def load_from_csv(csv_path):
@@ -841,6 +871,28 @@ def load_from_csv(csv_path):
 
     model.set_ref(ref_y)
 
+    # 指示剂前沿（旧版 CSV 没有这两列，读不到就保持 None）
+    dye_px = None
+    for r in rows:
+        v = (r.get("dye_front_px") or "").strip()
+        if v:
+            try:
+                dye_px = float(v)
+                break
+            except ValueError:
+                pass
+    if dye_px is None:
+        for r in rows:
+            v = (r.get("dye_front_value") or "").strip()
+            if v:
+                try:
+                    dye_px = ref_y + float(v) / scale
+                    break
+                except ValueError:
+                    pass
+    if dye_px is not None:
+        model.dye_front = dye_px
+
     if sorted(grouped) != list(range(1, len(grouped) + 1)):
         print("警告：CSV 的 lane_index 不连续，已按顺序重建泳道。")
     print("已从 %s 还原 %d 条泳道、%d 条带（单位 %s）"
@@ -866,6 +918,7 @@ b：上一条泳道
 z：撤销当前泳道最后一条带
 d：清空当前泳道所有条带
 f：重新设定加样参考线（自动重算距离）
+t：标注指示剂前沿（dye front）：点击其水平位置
 c：框选裁剪，之后只显示框选范围内的图像
 q：保存并退出
 r：复位视图；滚轮缩放；方向键平移
@@ -876,7 +929,7 @@ Marker 泳道可连续测多条带，按 Enter / n 结束本泳道"""
 
 class MarkerUI:
     def __init__(self, rgb_bgr, model, out_prefix, src_path,
-                 kda_arg=None):
+                 kda_arg=None, dye_front_px=None, dye_front_mm=None):
         self.rgb = rgb_bgr
         self.model = model
         self.out_prefix = out_prefix
@@ -896,6 +949,13 @@ class MarkerUI:
         self.crop_start = None      # 拖拽起点 (x, y)
         self.crop_rect = None       # [x0, y0, x1, y1]
         self._state_before_crop = None
+        # 指示剂前沿（dye front）
+        self._state_before_dye = None
+        self._dye_front_mm = None   # --dye-front-mm 待参考线确定后换算
+        if dye_front_px is not None:
+            self.model.dye_front = float(dye_front_px)
+        if dye_front_mm is not None:
+            self._dye_front_mm = float(dye_front_mm)
         self._view_margin = 0.10 * self.W
         self.view = [-self._view_margin, self.W + self._view_margin,
                      float(self.H), 0.0]
@@ -1044,6 +1104,15 @@ class MarkerUI:
     # -- 状态切换 ---------------------------------------------------------
     def set_reference(self, y):
         self.model.set_ref(float(np.clip(y, 0, self.H - 1)))
+        # 命令行给的 dye front 距离要等参考线确定后才能换算成像素
+        if self._dye_front_mm is not None and self.model.dye_front is None:
+            self.model.dye_front = float(np.clip(
+                self.model.ref_y + self._dye_front_mm / self.model.scale,
+                0, self.H - 1))
+            print("已按 %.2f %s 标注指示剂前沿: y=%.1f px"
+                  % (self._dye_front_mm, self.model.unit,
+                     self.model.dye_front))
+            self._dye_front_mm = None
         if self._ref_return:
             self.state = self._ref_return
             self._ref_return = None
@@ -1120,6 +1189,9 @@ class MarkerUI:
         self.model.skipped = set()
         self.model.marker_kda = {}
         self.model.ref_y = 0.0
+        if self.model.dye_front is not None:
+            dy = self.model.dye_front - y0
+            self.model.dye_front = dy if 0 <= dy <= h else None
         self.cur = 0
         self.hover = -1
         self._ref_return = None
@@ -1265,6 +1337,18 @@ class MarkerUI:
         if self.state == "crop":
             self.crop_start = (x, y)
             self.crop_rect = [x, y, x, y]
+            self.redraw()
+            return
+
+        if self.state == "dye":
+            self.model.dye_front = y
+            self.state = self._state_before_dye or "bands"
+            self._state_before_dye = None
+            d_val = (y - self.model.ref_y) * self.model.scale
+            self._msg("已标注指示剂前沿：y=%.0f px，距加样参考线 %.2f %s。"
+                      "按 t 可重新设置，Delete 移除。"
+                      % (y, d_val, self.model.unit))
+            self._update_hud()
             self.redraw()
             return
 
@@ -1418,6 +1502,21 @@ class MarkerUI:
                 self.cancel_crop()
             return
 
+        # 设置指示剂前沿：点击确定位置，Esc 取消，Delete 移除
+        if self.state == "dye":
+            if k == "escape":
+                self.state = self._state_before_dye or "bands"
+                self._msg("已取消设置指示剂前沿。")
+            elif k in ("delete", "backspace"):
+                self.model.dye_front = None
+                self.state = self._state_before_dye or "bands"
+                self._msg("已移除指示剂前沿标注。")
+            elif k in ("enter", "return"):
+                self._msg("请点击指示剂前沿所在的水平位置；Esc 取消。")
+            self._update_hud()
+            self.redraw()
+            return
+
         if k in ("h", "?"):
             self.help_visible = not self.help_visible
             self._update_hud()
@@ -1521,6 +1620,13 @@ class MarkerUI:
         elif k == "c" and self.state in ("ref", "lanes", "bands"):
             self.start_crop()
 
+        elif k == "t" and self.state in ("lanes", "bands"):
+            self._state_before_dye = self.state
+            self.state = "dye"
+            self.pending_top = None
+            self._msg("点击指示剂前沿（dye front）所在的水平位置；"
+                      "Esc 取消；Delete 移除已有标注。")
+
         elif k == "f" and self.state in ("lanes", "bands"):
             self._ref_return = self.state
             self.state = "ref"
@@ -1604,6 +1710,7 @@ def run_demo(rgb_bgr, scale, unit, out_prefix):
 
     # 最后一条样品泳道没有条带
     model.skipped.add(10)
+    model.dye_front = 430.0
 
     save_outputs(rgb_bgr, model, out_prefix + "_demo")
 
@@ -1632,6 +1739,12 @@ def main():
     ap.add_argument("--from-csv", default=None,
                     help="从已有的 *_lane_measurements.csv 还原并重绘，"
                          "不再交互（通常配合 --marker-kda）")
+    ap.add_argument("--dye-front-px", type=float, default=None,
+                    help="指示剂前沿（dye front）的 y 像素坐标，"
+                         "给已有结果补线时最直接")
+    ap.add_argument("--dye-front-mm", type=float, default=None,
+                    help="指示剂前沿距加样参考线的距离（mm，向下为正；"
+                         "--no-crop 时为 px）；交互模式下在参考线确定后生效")
     args = ap.parse_args()
 
     if args.from_csv:
@@ -1642,6 +1755,10 @@ def main():
             apply_kda_values(model, args.marker_kda)
         elif any(model.marker_kda.values()):
             print("沿用 CSV 中已有的 Marker 分子量。")
+        if args.dye_front_px is not None:
+            model.dye_front = float(args.dye_front_px)
+        elif args.dye_front_mm is not None:
+            model.dye_front = model.ref_y + args.dye_front_mm / model.scale
         save_outputs(c, model, prefix)
         return
 
@@ -1705,7 +1822,9 @@ def main():
         return
 
     model = GelModel(c.shape[1], scale, unit)
-    MarkerUI(c, model, prefix, src, kda_arg=args.marker_kda)
+    MarkerUI(c, model, prefix, src, kda_arg=args.marker_kda,
+             dye_front_px=args.dye_front_px,
+             dye_front_mm=args.dye_front_mm)
 
 
 if __name__ == "__main__":
