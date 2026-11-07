@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+# 程序输出（标注图 / 测量表 / 中间凝胶图）
+*_gel_flipped.png
+*_lane_annotated.png
+*_lane_annotated_alt.png
+*_lane_measurements.csv
+*_lane_measurements_alt.csv
