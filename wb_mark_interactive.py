@@ -4,7 +4,8 @@ WB / 凝胶图像交互标注工具
 
 功能：
   1. 启动时在脚本所在文件夹中选择任意图片（也可用 --src 指定）；
-     自动提取凝胶区域（透视校正）并水平左右翻转，也可 --no-crop 直接标注原图；
+     默认直接使用原图；需要时可加 --rectify 自动提取凝胶区域（透视校正），
+     加 --flip 水平左右翻转；
   2. 从左到右点击泳道中心，自动编号；任意泳道都可以按 m 设为 / 取消 Marker；
   3. 点击条带上、下边缘，计算条带中心到加样参考线的距离与条带厚度；
      Marker 泳道可连续测量任意多条带，按 Enter / n 结束本泳道；
@@ -18,13 +19,17 @@ WB / 凝胶图像交互标注工具
 用法：
     python wb_mark_interactive.py                  # 弹窗选择文件夹里的图片
     python wb_mark_interactive.py --src 图.tif      # 直接指定图片
-    python wb_mark_interactive.py --manual-corners # 自动找四角失败时手动点四角
-    python wb_mark_interactive.py --no-crop        # 不裁胶、不翻转，直接标注整张图
+    python wb_mark_interactive.py --rectify        # 自动提取凝胶区域（透视校正）
+    python wb_mark_interactive.py --rectify --flip # 提取后再水平翻转
+    python wb_mark_interactive.py --manual-corners # 手动点四角（隐含 --rectify）
     python wb_mark_interactive.py --demo           # 无交互，用预设示例看输出效果
 
     # 给已有测量结果补加 kDa 标尺（不用重新点泳道/条带）：
     python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
         --marker-kda "180,130,100,70,55,40,35"
+
+    # 打开已有结果继续手动补充（例如按 t 补指示剂前沿）：
+    python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
 
 交互按键：
     左键单击   参考线步骤：设定加样参考线；
@@ -48,7 +53,8 @@ WB / 凝胶图像交互标注工具
     滚轮        以鼠标位置为中心缩放；方向键平移；r 复位视图
 
 输出（保存在脚本所在文件夹，前缀默认取图片文件名）：
-    <前缀>_gel_flipped.png          提取并翻转后的凝胶（--no-crop 时不生成）
+    <前缀>_gel.png                  实际用于标注的图（未翻转；供 --from-csv 还原）
+    <前缀>_gel_flipped.png          实际用于标注的图（已翻转）
     <前缀>_lane_annotated.png       最终标注图
     <前缀>_lane_measurements.csv    测量长表：每条带一行
 
@@ -57,7 +63,10 @@ CSV 列：
     x_center_px, x_left_px, x_right_px,
     y_top_px, y_bottom_px, y_center_px,
     thickness_px, thickness_value,
-    distance_px, distance_value, marker_kda, unit, note
+    distance_px, distance_value, marker_kda,
+    dye_front_px, dye_front_value,
+    img_x0_px, img_y0_px, img_w_px, img_h_px, unit, note
+    （img_* 记录应用内裁剪区域，--from-csv/--edit 时据此精确复位）
 
     同一泳道有多条带时，band_index 按从上到下的顺序编号；
     thickness_value / distance_value 的单位由 unit 列给出（通常为 mm）；
@@ -356,6 +365,9 @@ class GelModel:
         self.unit = unit            # "mm" 或 "px"
         self.ref_y = 0.0
         self.dye_front = None       # 指示剂前沿（dye front）的 y 像素坐标
+        # 应用内裁剪的矩形 (x0, y0, x1, y1)，相对保存的凝胶图
+        # （<前缀>_gel_flipped.png 或 <前缀>_gel.png）；None 表示整图
+        self.crop_rect = None
         self.lanes = []             # [{'x': float, 'marker': bool}, ...]
         self.bands = {}             # lane_index -> [band, ...]
         self.skipped = set()        # 明确标记为“无条带”的泳道
@@ -698,6 +710,14 @@ def save_outputs(rgb_bgr, model, out_prefix):
     labels = model.labels()
     data_rows = []
     n_band = 0
+
+    # 当前标注图在原始凝胶图中的位置（应用内裁剪后会非零），
+    # 写入 CSV 以便下次 --from-csv / --edit 时精确复位。
+    rect = getattr(model, "crop_rect", None)
+    img_x0 = float(rect[0]) if rect else 0.0
+    img_y0 = float(rect[1]) if rect else 0.0
+    img_cols = ["%.1f" % img_x0, "%.1f" % img_y0, "%d" % W, "%d" % H]
+
     if model.dye_front is not None:
         dye_px_str = "%.1f" % model.dye_front
         dye_val_str = "%.2f" % ((model.dye_front - model.ref_y) * model.scale)
@@ -719,7 +739,8 @@ def save_outputs(rgb_bgr, model, out_prefix):
                     "%.1f" % b["center"],
                     "%.1f" % b["thick_px"], "%.2f" % b["thick_val"],
                     "%.1f" % b["dist_px"], "%.2f" % b["dist_val"],
-                    kda_str, dye_px_str, dye_val_str, model.unit, "ok",
+                    kda_str, dye_px_str, dye_val_str] + img_cols + [
+                    model.unit, "ok",
                 ])
                 n_band += 1
         else:
@@ -727,6 +748,7 @@ def save_outputs(rgb_bgr, model, out_prefix):
                     ("marker_no_band" if l["marker"] else "not_measured"))
             data_rows.append(base[:3] + [0, 0] + base[5:] + [
                 "", "", "", "", "", "", "", "", dye_px_str, dye_val_str,
+            ] + img_cols + [
                 model.unit, note,
             ])
 
@@ -736,7 +758,9 @@ def save_outputs(rgb_bgr, model, out_prefix):
         "y_top_px", "y_bottom_px", "y_center_px",
         "thickness_px", "thickness_value",
         "distance_px", "distance_value", "marker_kda",
-        "dye_front_px", "dye_front_value", "unit", "note",
+        "dye_front_px", "dye_front_value",
+        "img_x0_px", "img_y0_px", "img_w_px", "img_h_px",
+        "unit", "note",
     ]
     for path in (csv_path,
                  os.path.join(BASE, out_prefix + "_lane_measurements_alt.csv")):
@@ -781,7 +805,87 @@ def save_outputs(rgb_bgr, model, out_prefix):
                  (model.dye_front - model.ref_y) * model.scale, model.unit))
 
 
-def load_from_csv(csv_path):
+def _gel_bbox(img_gray):
+    """找出标注图中凝胶图像所占的区域（四周白边 / 标题 / kDa 标尺不算）。"""
+    nonwhite = (img_gray < 240).astype(np.float32)
+    rows = nonwhite.mean(axis=1)
+    cols = nonwhite.mean(axis=0)
+    ry = np.where(rows > 0.5)[0]
+    rx = np.where(cols > 0.5)[0]
+    if len(rx) < 10 or len(ry) < 10:
+        return None
+    return int(rx[0]), int(rx[-1]), int(ry[0]), int(ry[-1])
+
+
+def guess_crop_rect(gel_bgr, ann_bgr, min_w=0.0, min_h=0.0):
+    """从旧版标注图反推当时用 c 裁剪出的矩形（相对凝胶图坐标）。
+
+    旧版 CSV 没记录裁剪区域，但 *_lane_annotated.png 本身就是
+    “裁剪后的图 + 标注”。抹掉红色标注后与凝胶图做多尺度匹配即可。
+    返回 (x0, y0, x1, y1) 或 None。
+    """
+    g = cv2.cvtColor(gel_bgr, cv2.COLOR_BGR2GRAY)
+    bb = _gel_bbox(cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2GRAY))
+    if bb is None:
+        return None
+    gx0, gx1, gy0, gy1 = bb
+    sub = ann_bgr[gy0:gy1 + 1, gx0:gx1 + 1]
+    if sub.size == 0:
+        return None
+    sg = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b, gg, r = cv2.split(sub.astype(np.int16))
+    # 红/蓝标注线与白底文字框会干扰匹配，做掩膜
+    bad = ((((r - gg) > 60) & (r > 120)) | (sg > 245)).astype(np.uint8)
+    bad = cv2.dilate(bad, np.ones((5, 5), np.uint8))
+    keep = ((1 - bad) * 255).astype(np.uint8)
+    if (keep > 0).mean() < 0.4:
+        return None
+
+    def hp(img):
+        return img - cv2.GaussianBlur(img, (0, 0), 12)
+
+    gel_hp = hp(g.astype(np.float32))
+    aspect = (gy1 - gy0 + 1) / float(gx1 - gx0 + 1)
+    W_gel, H_gel = g.shape[1], g.shape[0]
+    w_lo = max(24, int(np.ceil(min_w)),
+               int(np.ceil(min_h / max(aspect, 1e-6))))
+    w_hi = min(W_gel, int(H_gel / max(aspect, 1e-6)))
+    if w_hi <= w_lo + 4:
+        return None
+
+    best = (-1.0, None)
+    for step in (8, 2):
+        if best[1] is None:
+            lo, hi = w_lo, w_hi
+        else:
+            w0 = best[1][2]
+            lo = max(w_lo, w0 - 4 * step)
+            hi = min(w_hi, w0 + 4 * step)
+        for w in range(lo, hi + 1, step):
+            h = int(round(w * aspect))
+            if h < 8 or h > H_gel or w > W_gel:
+                continue
+            tpl = hp(cv2.resize(sg, (w, h), interpolation=cv2.INTER_AREA))
+            m = cv2.resize(keep, (w, h), interpolation=cv2.INTER_NEAREST)
+            if (m > 0).mean() < 0.4:
+                continue
+            res = cv2.matchTemplate(gel_hp, tpl, cv2.TM_CCORR_NORMED,
+                                    mask=m)
+            _, mx, _, ml = cv2.minMaxLoc(res)
+            if mx > best[0]:
+                best = (mx, (ml[0], ml[1], w, h))
+    score, rect = best
+    if rect is None or score < 0.12:
+        return None
+    x0, y0, w, h = rect
+    x0 = max(0, min(x0, W_gel - w))
+    y0 = max(0, min(y0, H_gel - h))
+    print("从标注图恢复裁剪区域：x=%d..%d, y=%d..%d（匹配度 %.2f）"
+          % (x0, x0 + w, y0, y0 + h, score))
+    return x0, y0, x0 + w, y0 + h
+
+
+def load_from_csv(csv_path, crop_override=None):
     """从已有的 *_lane_measurements.csv 还原模型和凝胶图，便于补加 kDa 标尺。"""
     csv_path = os.path.abspath(csv_path)
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
@@ -836,7 +940,87 @@ def load_from_csv(csv_path):
     ref_y = float(np.median(refs))
     scale = float(np.median(scales))
 
+    # ---- 应用内裁剪区域：新版 CSV 有记录，旧版从标注图反推 ----
+    def _f(row, key):
+        try:
+            return float((row.get(key) or "").strip())
+        except (TypeError, ValueError):
+            return None
+
+    crop = None
+    if crop_override:
+        crop = tuple(int(v) for v in crop_override)
+        print("使用手动指定的裁剪区域：x=%d..%d, y=%d..%d"
+              % (crop[0], crop[2], crop[1], crop[3]))
+    else:
+        cx0 = _f(rows[0], "img_x0_px")
+        cy0 = _f(rows[0], "img_y0_px")
+        cw = _f(rows[0], "img_w_px")
+        ch = _f(rows[0], "img_h_px")
+        if None not in (cx0, cy0, cw, ch) and cw > 0 and ch > 0:
+            # 记录的矩形必须落在当前凝胶图范围内，否则说明这张图
+            # 本身已经是裁剪后的图（此时无需再裁）
+            if (cx0 + cw <= W and cy0 + ch <= H
+                    and (cx0, cy0, cw, ch) != (0.0, 0.0, float(W), float(H))):
+                crop = (int(round(cx0)), int(round(cy0)),
+                        int(round(cx0 + cw)), int(round(cy0 + ch)))
+        else:
+            max_x = max_y = 0.0
+            for r in rows:
+                for key, target in (("x_right_px", "x"),
+                                    ("y_bottom_px", "y")):
+                    v = _f(r, key)
+                    if v is None:
+                        continue
+                    if target == "x":
+                        max_x = max(max_x, v)
+                    else:
+                        max_y = max(max_y, v)
+            ann_path = next((p for p in (
+                os.path.join(os.path.dirname(csv_path),
+                             prefix + "_lane_annotated.png"),
+                os.path.join(BASE, prefix + "_lane_annotated.png"),
+                os.path.join(os.path.dirname(csv_path),
+                             prefix + "_lane_annotated_alt.png"),
+                os.path.join(BASE, prefix + "_lane_annotated_alt.png"),
+            ) if os.path.isfile(p)), None)
+            ann = None
+            if ann_path:
+                ann = cv2.imdecode(np.fromfile(ann_path, dtype=np.uint8),
+                                   cv2.IMREAD_COLOR)
+            need = max_x < 0.98 * W
+            if ann is not None and not need:
+                bb = _gel_bbox(cv2.cvtColor(ann, cv2.COLOR_BGR2GRAY))
+                if bb is not None:
+                    a_asp = (bb[3] - bb[2] + 1) / float(bb[1] - bb[0] + 1)
+                    if abs(a_asp - H / float(W)) > 0.04 * (H / float(W)):
+                        need = True
+            if need and ann is not None:
+                print("检测到旧版结果可能使用过应用内裁剪，"
+                      "正在根据标注图恢复裁剪区域…")
+                crop = guess_crop_rect(color, ann,
+                                       min_w=max_x, min_h=max_y)
+                if crop is None:
+                    print("警告：无法自动恢复裁剪区域。若标注错位，"
+                          "请加 --crop-rect x0,y0,x1,y1 手动指定。")
+            elif need:
+                print("警告：缺少标注图，无法判断旧结果是否裁剪过。"
+                      "若标注错位，请加 --crop-rect x0,y0,x1,y1 手动指定。")
+
+    if crop:
+        x0, y0, x1, y1 = crop
+        x0 = max(0, min(x0, W - 2))
+        y0 = max(0, min(y0, H - 2))
+        x1 = max(x0 + 2, min(x1, W))
+        y1 = max(y0 + 2, min(y1, H))
+        color = np.ascontiguousarray(color[y0:y1, x0:x1])
+        H, W = color.shape[:2]
+        crop = (x0, y0, x1, y1)
+        print("使用裁剪区域：%dx%d（x=%d..%d, y=%d..%d）"
+              % (W, H, x0, x1, y0, y1))
+
     model = GelModel(W, scale, unit)
+    model.crop_rect = crop
     for li in sorted(grouped):
         rs = grouped[li]
         first = rs[0]
@@ -950,6 +1134,10 @@ class MarkerUI:
         self.crop_start = None      # 拖拽起点 (x, y)
         self.crop_rect = None       # [x0, y0, x1, y1]
         self._state_before_crop = None
+        # 当前图像左上角在原始凝胶图中的位置（用于记录裁剪区域）
+        rect = getattr(model, "crop_rect", None)
+        self._img_x0 = float(rect[0]) if rect else 0.0
+        self._img_y0 = float(rect[1]) if rect else 0.0
         # 指示剂前沿（dye front）
         self._state_before_dye = None
         self._dye_front_mm = None   # --dye-front-mm 待参考线确定后换算
@@ -1194,8 +1382,12 @@ class MarkerUI:
             return
 
         self.rgb = np.ascontiguousarray(self.rgb[y0:y1, x0:x1])
+        self._img_x0 += x0
+        self._img_y0 += y0
         self.H, self.W = self.rgb.shape[:2]
         self.model.W = float(self.W)
+        self.model.crop_rect = (self._img_x0, self._img_y0,
+                                self._img_x0 + self.W, self._img_y0 + self.H)
         self.model.lanes = []
         self.model.bands = {}
         self.model.skipped = set()
@@ -1735,16 +1927,22 @@ def main():
                     help="图片路径；省略时弹出文件选择框（默认脚本文件夹）")
     ap.add_argument("--out-prefix", default=None,
                     help="输出文件名前缀（默认为图片文件名）")
+    ap.add_argument("--rectify", action="store_true",
+                    help="启用自动提取凝胶区域（自动找四角 + 透视校正）；"
+                         "默认关闭，直接使用原图")
     ap.add_argument("--manual-corners", action="store_true",
-                    help="手动点击凝胶四角")
+                    help="手动点击凝胶四角（隐含 --rectify）")
+    ap.add_argument("--flip", action="store_true",
+                    help="水平翻转图像（默认不翻转）")
     ap.add_argument("--demo", action="store_true",
                     help="无交互，用预设示例生成一张标注图")
     ap.add_argument("--mm-per-px", type=float, default=None,
-                    help="覆盖自动估算的比例（mm/像素）")
+                    help="覆盖自动估算的比例（mm/像素）；未启用 --rectify "
+                         "时给出此值才会用 mm 为单位")
     ap.add_argument("--no-crop", action="store_true",
-                    help="不裁胶、不翻转，直接标注整张图（默认单位为 px）")
+                    help="（兼容旧参数）等同于默认行为：不自动提取凝胶区域")
     ap.add_argument("--no-flip", action="store_true",
-                    help="透视校正后不水平翻转")
+                    help="（兼容旧参数）不水平翻转；现在本来就是默认行为")
     ap.add_argument("--marker-kda", default=None,
                     help="Marker 分子量（kDa），按从上到下用逗号分隔，"
                          "如 180,130,100,70,55,40,35")
@@ -1759,11 +1957,25 @@ def main():
                          "给已有结果补线时最直接")
     ap.add_argument("--dye-front-mm", type=float, default=None,
                     help="指示剂前沿距加样参考线的距离（mm，向下为正；"
-                         "--no-crop 时为 px）；交互模式下在参考线确定后生效")
+                         "无 mm/px 标定时为 px）；交互模式下在参考线确定后生效")
+    ap.add_argument("--crop-rect", default=None,
+                    help="配合 --from-csv：手动指定旧结果的裁剪区域 "
+                         "x0,y0,x1,y1（相对凝胶图的像素坐标）")
     args = ap.parse_args()
 
     if args.from_csv:
-        model, c, prefix = load_from_csv(args.from_csv)
+        crop_override = None
+        if args.crop_rect:
+            try:
+                vals = [float(v) for v in
+                        args.crop_rect.replace("，", ",").split(",")]
+            except ValueError:
+                vals = []
+            if len(vals) != 4:
+                sys.exit("--crop-rect 格式应为 x0,y0,x1,y1（像素坐标）")
+            crop_override = tuple(int(round(v)) for v in vals)
+        model, c, prefix = load_from_csv(args.from_csv,
+                                         crop_override=crop_override)
         if args.out_prefix:
             prefix = args.out_prefix
         if args.marker_kda:
@@ -1804,20 +2016,11 @@ def main():
 
     gray, color = read_image(src)
 
-    if args.no_crop:
-        if args.manual_corners:
-            print("提示：--no-crop 下忽略 --manual-corners。")
-        g, c = gray, color
-        if args.mm_per_px:
-            scale = args.mm_per_px
-            unit = "mm"
-        else:
-            scale = 1.0
-            unit = "px"
-        print("不裁胶，直接标注原图 %dx%d；单位 %s"
-              % (c.shape[1], c.shape[0], unit))
-        rect_path = None
-    else:
+    # 默认直接使用原图；只有显式 --rectify（或 --manual-corners）才提取凝胶
+    do_rectify = (args.rectify or args.manual_corners) and not args.no_crop
+    do_flip = args.flip and not args.no_flip
+
+    if do_rectify:
         if args.manual_corners:
             src_pts = pick_corners(gray)
             auto = False
@@ -1826,21 +2029,35 @@ def main():
         print("凝胶四角（TL, TR, BR, BL）:\n", np.round(src_pts, 1))
         print("自动检测:", "成功" if auto else "失败，使用经验四角")
 
-        g, c, H, avg_h = rectify(gray, color, src_pts,
-                                 flip=not args.no_flip)
+        g, c, H, avg_h = rectify(gray, color, src_pts, flip=do_flip)
         scale = (args.mm_per_px if args.mm_per_px
                  else compute_mm_per_px(avg_h, H, gray.shape[0]))
         unit = "mm"
+        print("已自动提取凝胶区域%s" % ("并水平翻转" if do_flip else ""))
+    else:
+        g, c = gray, color
+        if do_flip:
+            c = np.ascontiguousarray(c[:, ::-1])
+            g = np.ascontiguousarray(g[:, ::-1])
+        if args.mm_per_px:
+            scale = args.mm_per_px
+            unit = "mm"
+        else:
+            scale = 1.0
+            unit = "px"
+        print("直接使用原图 %dx%d（未自动提取%s）；单位 %s"
+              % (c.shape[1], c.shape[0],
+                 "，已水平翻转" if do_flip else "", unit))
 
-        suffix = "_gel_flipped.png" if not args.no_flip else "_gel.png"
-        rect_path = os.path.join(BASE, prefix + suffix)
-        ok, buf = cv2.imencode(".png", c)
-        if not ok:
-            sys.exit("保存失败: %s" % rect_path)
-        buf.tofile(rect_path)
-        print("提取并翻转后的凝胶: %s" % rect_path)
-        print("输出尺寸: %dx%d, 比例: %.5f mm/px"
-              % (c.shape[1], c.shape[0], scale))
+    suffix = "_gel_flipped.png" if do_flip else "_gel.png"
+    rect_path = os.path.join(BASE, prefix + suffix)
+    ok, buf = cv2.imencode(".png", c)
+    if not ok:
+        sys.exit("保存失败: %s" % rect_path)
+    buf.tofile(rect_path)
+    print("供后续 --from-csv 还原用的图片: %s" % rect_path)
+    print("输出尺寸: %dx%d, 比例: %.5f %s/px"
+          % (c.shape[1], c.shape[0], scale, unit))
 
     if args.demo:
         run_demo(c, scale, unit, prefix)
