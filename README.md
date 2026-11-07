@@ -1,10 +1,10 @@
 # EP_Annotaion
 
-A small interactive tool for annotating electrophoresis / Western-blot gel photos:
+A small interactive tool for annotating gel electrophoresis photos:
 measure the distance from each band to the loading line, mark marker lanes, label
 relative molecular masses, and export an annotated image plus a long-format CSV.
 
-一个用于凝胶电泳 / Western Blot 照片的交互式标注与测量小工具：直接标注原图
+一个用于凝胶电泳照片的交互式标注与测量小工具：直接标注原图
 （可选 `--rectify` 自动提取凝胶区域、`--flip` 翻转）、点击泳道与条带、测量条带
 中心到加样参考线的距离和条带厚度、标注 Marker 的相对分子质量、标注指示剂前沿
 （dye front），并导出带标注的 PNG 与长表格 CSV。
@@ -39,9 +39,9 @@ pip install opencv-python numpy matplotlib
 ## 使用方法
 
 ```bash
-python wb_mark_interactive.py
+python gel_mark_interactive.py
 # 也可直接指定图片
-python wb_mark_interactive.py --src 4-8_Merge.tif
+python gel_mark_interactive.py --src 4-8_Merge.tif
 ```
 
 启动后（省略 `--src` 会弹出文件选择框，默认定位在脚本所在文件夹）：
@@ -94,14 +94,14 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 示例：给已有测量结果补加分子量标尺，无需重新点击：
 
 ```bash
-python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --marker-kda "180,130,100,70,55,40,35"
 ```
 
 **推荐：打开已有结果手动补标指示剂前沿**（不用自己量，直接点）：
 
 ```bash
-python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
+python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
 ```
 
 打开后原有的泳道、条带、分子量都在，程序停在「③ 测量条带」：
@@ -111,21 +111,21 @@ python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
 示例：给已有结果补标指示剂前沿（距离单位 mm，从加样参考线量起，无需打开界面）：
 
 ```bash
-python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --dye-front-mm 32.5
 ```
 
 也可以用像素坐标（y 值，越大越靠下）：
 
 ```bash
-python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --dye-front-px 496
 ```
 
 多个参数可以叠加，例如同时补分子量与指示剂前沿：
 
 ```bash
-python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --marker-kda "180,130,100,70,55,40,35" --dye-front-mm 32.5
 ```
 

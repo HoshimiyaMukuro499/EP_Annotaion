@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-WB / 凝胶图像交互标注工具
+凝胶图像交互标注工具
 
 功能：
   1. 启动时在脚本所在文件夹中选择任意图片（也可用 --src 指定）；
@@ -17,19 +17,19 @@ WB / 凝胶图像交互标注工具
   7. 输出标注图 PNG + 长表 CSV（一条带一行，Marker 多条带不会互相覆盖）。
 
 用法：
-    python wb_mark_interactive.py                  # 弹窗选择文件夹里的图片
-    python wb_mark_interactive.py --src 图.tif      # 直接指定图片
-    python wb_mark_interactive.py --rectify        # 自动提取凝胶区域（透视校正）
-    python wb_mark_interactive.py --rectify --flip # 提取后再水平翻转
-    python wb_mark_interactive.py --manual-corners # 手动点四角（隐含 --rectify）
-    python wb_mark_interactive.py --demo           # 无交互，用预设示例看输出效果
+    python gel_mark_interactive.py                  # 弹窗选择文件夹里的图片
+    python gel_mark_interactive.py --src 图.tif      # 直接指定图片
+    python gel_mark_interactive.py --rectify        # 自动提取凝胶区域（透视校正）
+    python gel_mark_interactive.py --rectify --flip # 提取后再水平翻转
+    python gel_mark_interactive.py --manual-corners # 手动点四角（隐含 --rectify）
+    python gel_mark_interactive.py --demo           # 无交互，用预设示例看输出效果
 
     # 给已有测量结果补加 kDa 标尺（不用重新点泳道/条带）：
-    python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
+    python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
         --marker-kda "180,130,100,70,55,40,35"
 
     # 打开已有结果继续手动补充（例如按 t 补指示剂前沿）：
-    python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
+    python gel_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
 
 交互按键：
     左键单击   参考线步骤：设定加样参考线；
@@ -1169,7 +1169,7 @@ class MarkerUI:
                                  top=0.935, bottom=0.09)
         try:
             self.fig.canvas.manager.set_window_title(
-                "WB 标注 - %s" % os.path.basename(src_path))
+                "凝胶标注 - %s" % os.path.basename(src_path))
         except Exception:
             pass
 
@@ -1922,7 +1922,7 @@ def run_demo(rgb_bgr, scale, unit, out_prefix):
 # ----------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="WB / 凝胶图像泳道与条带交互标注")
+        description="凝胶图像泳道与条带交互标注")
     ap.add_argument("--src", default=None,
                     help="图片路径；省略时弹出文件选择框（默认脚本文件夹）")
     ap.add_argument("--out-prefix", default=None,
