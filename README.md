@@ -80,7 +80,8 @@ python wb_mark_interactive.py --src 4-8_Merge.tif
 | `--no-crop` | 不裁胶、不翻转，直接标注整张图（单位为 px） |
 | `--no-flip` | 透视校正后不水平翻转 |
 | `--marker-kda` | Marker 分子量，按从上到下用逗号分隔，如 `180,130,100,70,55,40,35` |
-| `--from-csv` | 从已有的 `*_lane_measurements.csv` 还原并重绘，不再交互（常配合 `--marker-kda`） |
+| `--from-csv` | 从已有的 `*_lane_measurements.csv` 还原并重绘，默认不再交互（常配合 `--marker-kda`） |
+| `--edit` | 配合 `--from-csv`：打开交互窗口继续手动编辑（泳道、条带、kDa 全部保留），`q` 保存 |
 | `--dye-front-mm` | 指示剂前沿距加样参考线的距离（mm），与 `--from-csv` 配合可直接补标 |
 | `--dye-front-px` | 指示剂前沿的 y 像素坐标（凝胶图内），优先级高于 `--dye-front-mm` |
 
@@ -91,7 +92,17 @@ python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \
     --marker-kda "180,130,100,70,55,40,35"
 ```
 
-示例：给已有结果补标指示剂前沿（距离单位 mm，从加样参考线量起）：
+**推荐：打开已有结果手动补标指示剂前沿**（不用自己量，直接点）：
+
+```bash
+python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv --edit
+```
+
+打开后原有的泳道、条带、分子量都在，程序停在「③ 测量条带」：
+按 `t` → 在指示剂前沿位置点一下 → 按 `q` 保存，同名的 CSV / PNG 会被更新。
+`Delete` 可移除已标的前沿，`Esc` 取消本次设置。
+
+示例：给已有结果补标指示剂前沿（距离单位 mm，从加样参考线量起，无需打开界面）：
 
 ```bash
 python wb_mark_interactive.py --from-csv 4-8_Merge_lane_measurements.csv \

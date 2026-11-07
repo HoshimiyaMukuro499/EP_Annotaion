@@ -929,7 +929,8 @@ Marker 泳道可连续测多条带，按 Enter / n 结束本泳道"""
 
 class MarkerUI:
     def __init__(self, rgb_bgr, model, out_prefix, src_path,
-                 kda_arg=None, dye_front_px=None, dye_front_mm=None):
+                 kda_arg=None, dye_front_px=None, dye_front_mm=None,
+                 resume=False):
         self.rgb = rgb_bgr
         self.model = model
         self.out_prefix = out_prefix
@@ -960,8 +961,19 @@ class MarkerUI:
         self.view = [-self._view_margin, self.W + self._view_margin,
                      float(self.H), 0.0]
 
-        self.msg = ("第 1 步：点击凝胶上侧“加样参考线”的位置；"
-                    "直接按 Enter 使用图像上边缘 y=0。按 h 查看全部按键。")
+        if resume and model.lanes:
+            # 载入已有标注后继续手动编辑：直接停在测量条带步骤，
+            # 用户按 t 即可补充指示剂前沿。
+            self.state = "bands"
+            self.cur = len(model.lanes) - 1
+            self.msg = ("已载入已有标注（%d 条泳道、%d 条带）。"
+                        "按 t 再点击指示剂前沿即可补标；可继续点击补测条带；"
+                        "按 b 回看前一条泳道，确认后按 q 保存退出。"
+                        % (len(model.lanes),
+                           sum(len(v) for v in model.bands.values())))
+        else:
+            self.msg = ("第 1 步：点击凝胶上侧“加样参考线”的位置；"
+                        "直接按 Enter 使用图像上边缘 y=0。按 h 查看全部按键。")
 
         self.fig, self.ax = plt.subplots(
             figsize=(12, 12 * self.H / self.W))
@@ -1738,7 +1750,10 @@ def main():
                          "如 180,130,100,70,55,40,35")
     ap.add_argument("--from-csv", default=None,
                     help="从已有的 *_lane_measurements.csv 还原并重绘，"
-                         "不再交互（通常配合 --marker-kda）")
+                         "默认不再交互（通常配合 --marker-kda）")
+    ap.add_argument("--edit", action="store_true",
+                    help="配合 --from-csv：载入已有标注后打开交互窗口，"
+                         "可继续手动补充（例如按 t 标指示剂前沿），q 保存")
     ap.add_argument("--dye-front-px", type=float, default=None,
                     help="指示剂前沿（dye front）的 y 像素坐标，"
                          "给已有结果补线时最直接")
@@ -1759,8 +1774,18 @@ def main():
             model.dye_front = float(args.dye_front_px)
         elif args.dye_front_mm is not None:
             model.dye_front = model.ref_y + args.dye_front_mm / model.scale
+        if args.edit:
+            # 打开交互窗口，所有已有泳道 / 条带 / 分子量都保留，
+            # 用户可直接按 t 手动补画指示剂前沿。
+            print("进入编辑模式：按 t 标注指示剂前沿，q 保存退出。")
+            MarkerUI(c, model, prefix, args.from_csv, resume=True)
+            return
         save_outputs(c, model, prefix)
         return
+
+    if args.edit:
+        sys.exit("--edit 需要配合 --from-csv 使用："
+                 "例如 --from-csv 4-8_Merge_lane_measurements.csv --edit")
 
     if args.demo and not args.src:
         args.src = os.path.join(BASE, "4-8_Merge.tif")
